@@ -1,0 +1,3 @@
+FROM nginx:alpine
+RUN echo "<h1>Hello from Cloud Final Project!</h1>" > /usr/share/nginx/html/index.html
+EXPOSE 80

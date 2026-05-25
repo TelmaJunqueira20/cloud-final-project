@@ -54,3 +54,4 @@ logs/
 # Service PIDs
 .service-pids
 
+*.pem
