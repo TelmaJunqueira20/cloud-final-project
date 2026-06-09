@@ -17,9 +17,37 @@ permissions:
   contents: read
 
 jobs:
+  ci:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Build user-service
+        run: mvn -f user-service/pom.xml clean package -DskipTests
+
+      - name: Build product-service
+        run: mvn -f product-service/pom.xml clean package -DskipTests
+
+      - name: Build order-service
+        run: mvn -f order-service/pom.xml clean package -DskipTests
+
+      - name: Build api-gateway
+        run: mvn -f api-gateway/pom.xml clean package -DskipTests
+
   build-and-push:
     name: Build and Push Images
     runs-on: ubuntu-latest
+    needs: ci
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout code
@@ -79,7 +107,7 @@ jobs:
       - name: Deploy via SSM
         run: |
           aws ssm send-command \
-           --instance-ids i-0c6e8773ca65c10e0 \
+            --instance-ids i-0c6e8773ca65c10e0 \
             --document-name "AWS-RunShellScript" \
             --parameters 'commands=[
               "aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin 442940292574.dkr.ecr.eu-west-1.amazonaws.com",
@@ -89,9 +117,9 @@ jobs:
               "docker pull 442940292574.dkr.ecr.eu-west-1.amazonaws.com/cloud-final-project:api-gateway",
               "docker rm -f user-service product-service order-service api-gateway 2>/dev/null || true",
               "docker network create microservices-network 2>/dev/null || true",
-              "docker run -d --name user-service --network microservices-network -p 8081:8081 -e SPRING_PROFILES_ACTIVE=docker -e DB_HOST=cloud-final-project-db.ctci8kww4g6j.eu-west-1.rds.amazonaws.com -e DB_USERNAME=admin -e DB_PASSWORD=Admin1234! 442940292574.dkr.ecr.eu-west-1.amazonaws.com/cloud-final-project:user-service",
-              "docker run -d --name product-service --network microservices-network -p 8082:8082 -e SPRING_PROFILES_ACTIVE=docker -e DB_HOST=cloud-final-project-db.ctci8kww4g6j.eu-west-1.rds.amazonaws.com -e DB_USERNAME=admin -e DB_PASSWORD=Admin1234! 442940292574.dkr.ecr.eu-west-1.amazonaws.com/cloud-final-project:product-service",
-              "docker run -d --name order-service --network microservices-network -p 8083:8083 -e SPRING_PROFILES_ACTIVE=docker -e DB_HOST=cloud-final-project-db.ctci8kww4g6j.eu-west-1.rds.amazonaws.com -e DB_USERNAME=admin -e DB_PASSWORD=Admin1234! 442940292574.dkr.ecr.eu-west-1.amazonaws.com/cloud-final-project:order-service",
+              "docker run -d --name user-service --network microservices-network -p 8081:8081 -e SPRING_PROFILES_ACTIVE=docker -e DB_HOST=cloud-final-project-db.ctci8kww4g6j.eu-west-1.rds.amazonaws.com -e DB_USERNAME=${{ secrets.DB_USERNAME }} -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} 442940292574.dkr.ecr.eu-west-1.amazonaws.com/cloud-final-project:user-service",
+              "docker run -d --name product-service --network microservices-network -p 8082:8082 -e SPRING_PROFILES_ACTIVE=docker -e DB_HOST=cloud-final-project-db.ctci8kww4g6j.eu-west-1.rds.amazonaws.com -e DB_USERNAME=${{ secrets.DB_USERNAME }} -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} 442940292574.dkr.ecr.eu-west-1.amazonaws.com/cloud-final-project:product-service",
+              "docker run -d --name order-service --network microservices-network -p 8083:8083 -e SPRING_PROFILES_ACTIVE=docker -e DB_HOST=cloud-final-project-db.ctci8kww4g6j.eu-west-1.rds.amazonaws.com -e DB_USERNAME=${{ secrets.DB_USERNAME }} -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} 442940292574.dkr.ecr.eu-west-1.amazonaws.com/cloud-final-project:order-service",
               "docker run -d --name api-gateway --network microservices-network -p 8080:8080 -e SPRING_PROFILES_ACTIVE=docker -e USER_SERVICE_HOST=user-service -e PRODUCT_SERVICE_HOST=product-service -e ORDER_SERVICE_HOST=order-service 442940292574.dkr.ecr.eu-west-1.amazonaws.com/cloud-final-project:api-gateway"
             ]' \
             --region eu-west-1
