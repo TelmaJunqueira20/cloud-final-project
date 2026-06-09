@@ -1,8 +1,9 @@
 package pt.ulusofona.orderservice.service;
 
+import io.awspring.cloud.sqs.operations.SqsTemplate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import pt.ulusofona.orderservice.client.ProductResponse;
@@ -26,37 +27,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
-/**
- * Service class containing business logic for Order operations.
- * 
- * <p>This service layer acts as an intermediary between the controller and repository
- * layers, implementing business logic and transaction management. It handles:
- * <ul>
- *   <li>Creating orders with validation via OpenFeign</li>
- *   <li>Updating order status</li>
- *   <li>Retrieving orders</li>
- *   <li>Publishing Kafka events for order lifecycle</li>
- * </ul>
- * 
- * <p>The service uses OpenFeign clients to communicate synchronously with:
- * <ul>
- *   <li>User Service - to validate user existence</li>
- *   <li>Product Service - to validate products and fetch product details</li>
- * </ul>
- * 
- * <p>The service publishes Kafka events for:
- * <ul>
- *   <li>Order creation - published to "order-created" topic</li>
- *   <li>Status changes - published to "order-status-changed" topic</li>
- * </ul>
- * 
- * @author Cloud Computing Course
- * @version 1.0.0
- * @since 1.0.0
- * @see OrderRepository
- * @see UserServiceClient
- * @see ProductServiceClient
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -65,33 +35,15 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final UserServiceClient userServiceClient;
     private final ProductServiceClient productServiceClient;
-    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final SqsTemplate sqsTemplate;
 
-    private static final String ORDER_CREATED_TOPIC = "order-created";
-    private static final String ORDER_STATUS_CHANGED_TOPIC = "order-status-changed";
+    @Value("${cloud.aws.sqs.queue-name:cloud-final-project-orders}")
+    private String sqsQueueName;
 
-    /**
-     * Creates a new order in the database.
-     * 
-     * <p>This method:
-     * <ol>
-     *   <li>Validates user exists using UserServiceClient (OpenFeign)</li>
-     *   <li>Validates products exist and fetches details using ProductServiceClient (OpenFeign)</li>
-     *   <li>Creates order items with product snapshots</li>
-     *   <li>Saves the order to the database</li>
-     *   <li>Publishes OrderCreatedEvent to Kafka</li>
-     * </ol>
-     * 
-     * @param request OrderRequest containing user ID and order items
-     * @return OrderResponse representing the created order
-     * @throws RuntimeException if user or product validation fails
-     * @apiNote This method uses a write transaction and publishes Kafka events
-     */
     @Transactional
     public OrderResponse createOrder(OrderRequest request) {
         log.info("Creating order for user ID: {}", request.getUserId());
 
-        // Validate user exists using OpenFeign (synchronous call)
         try {
             UserResponse user = userServiceClient.getUserById(request.getUserId());
             log.debug("User validated: {}", user.getName());
@@ -100,14 +52,11 @@ public class OrderService {
             throw new RuntimeException("User not found with ID: " + request.getUserId());
         }
 
-        // Create order entity
         Order order = new Order();
         order.setUserId(request.getUserId());
         order.setStatus(OrderStatus.PENDING);
 
-        // Process each order item
         for (OrderItemRequest itemRequest : request.getItems()) {
-            // Validate product exists and fetch details using OpenFeign (synchronous call)
             ProductResponse product;
             try {
                 product = productServiceClient.getProductById(itemRequest.getProductId());
@@ -117,14 +66,12 @@ public class OrderService {
                 throw new RuntimeException("Product not found with ID: " + itemRequest.getProductId());
             }
 
-            // Check stock availability
             if (product.getStockQuantity() < itemRequest.getQuantity()) {
                 throw new RuntimeException(
                     String.format("Insufficient stock for product %s. Available: %d, Requested: %d",
                         product.getName(), product.getStockQuantity(), itemRequest.getQuantity()));
             }
 
-            // Create order item with product snapshot
             OrderItem orderItem = new OrderItem();
             orderItem.setProductId(product.getId());
             orderItem.setProductName(product.getName());
@@ -133,25 +80,15 @@ public class OrderService {
             order.addOrderItem(orderItem);
         }
 
-        // Calculate total
         order.calculateTotal();
-
-        // Save order
         Order savedOrder = orderRepository.save(order);
         log.info("Order created successfully with ID: {}", savedOrder.getId());
 
-        // Publish Kafka event (asynchronous)
         publishOrderCreatedEvent(savedOrder);
 
         return mapToResponse(savedOrder);
     }
 
-    /**
-     * Retrieves all orders from the database.
-     * 
-     * @return List of OrderResponse objects representing all orders
-     * @apiNote This is a read-only transaction
-     */
     @Transactional(readOnly = true)
     public List<OrderResponse> getAllOrders() {
         return orderRepository.findAll().stream()
@@ -159,14 +96,6 @@ public class OrderService {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Retrieves an order by its unique identifier.
-     * 
-     * @param id The unique identifier of the order to retrieve
-     * @return OrderResponse object representing the order
-     * @throws RuntimeException if order with the given ID is not found
-     * @apiNote This is a read-only transaction
-     */
     @Transactional(readOnly = true)
     public OrderResponse getOrderById(Long id) {
         Order order = orderRepository.findById(id)
@@ -174,13 +103,6 @@ public class OrderService {
         return mapToResponse(order);
     }
 
-    /**
-     * Retrieves all orders for a specific user.
-     * 
-     * @param userId The ID of the user
-     * @return List of OrderResponse objects for the user
-     * @apiNote This is a read-only transaction
-     */
     @Transactional(readOnly = true)
     public List<OrderResponse> getOrdersByUserId(Long userId) {
         return orderRepository.findByUserId(userId).stream()
@@ -188,23 +110,6 @@ public class OrderService {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Updates the status of an order.
-     * 
-     * <p>This method:
-     * <ol>
-     *   <li>Retrieves the order by ID</li>
-     *   <li>Updates the status</li>
-     *   <li>Saves the order</li>
-     *   <li>Publishes OrderStatusChangedEvent to Kafka</li>
-     * </ol>
-     * 
-     * @param id The unique identifier of the order
-     * @param newStatus The new status to set
-     * @return OrderResponse object representing the updated order
-     * @throws RuntimeException if order is not found
-     * @apiNote This method uses a write transaction and publishes Kafka events
-     */
     @Transactional
     public OrderResponse updateOrderStatus(Long id, OrderStatus newStatus) {
         log.info("Updating order {} status to {}", id, newStatus);
@@ -217,22 +122,11 @@ public class OrderService {
         Order updatedOrder = orderRepository.save(order);
 
         log.info("Order {} status updated from {} to {}", id, previousStatus, newStatus);
-
-        // Publish Kafka event (asynchronous)
         publishOrderStatusChangedEvent(updatedOrder, previousStatus);
 
         return mapToResponse(updatedOrder);
     }
 
-    /**
-     * Publishes an OrderCreatedEvent to Kafka.
-     * 
-     * <p>This method creates an OrderCreatedEvent from the order entity and
-     * publishes it to the "order-created" Kafka topic. Other services can
-     * subscribe to this topic to react to order creation.
-     * 
-     * @param order The order that was created
-     */
     private void publishOrderCreatedEvent(Order order) {
         try {
             OrderCreatedEvent event = new OrderCreatedEvent(
@@ -249,24 +143,13 @@ public class OrderService {
                     order.getCreatedAt()
             );
 
-            kafkaTemplate.send(ORDER_CREATED_TOPIC, event);
-            log.info("Published OrderCreatedEvent for order ID: {}", order.getId());
+            sqsTemplate.send(sqsQueueName, event);
+            log.info("Published OrderCreatedEvent to SQS for order ID: {}", order.getId());
         } catch (Exception e) {
             log.error("Failed to publish OrderCreatedEvent for order ID: {}", order.getId(), e);
-            // Note: In production, you might want to use a dead letter queue or retry mechanism
         }
     }
 
-    /**
-     * Publishes an OrderStatusChangedEvent to Kafka.
-     * 
-     * <p>This method creates an OrderStatusChangedEvent from the order entity and
-     * publishes it to the "order-status-changed" Kafka topic. Other services can
-     * subscribe to this topic to react to status changes.
-     * 
-     * @param order The order whose status changed
-     * @param previousStatus The previous status before the change
-     */
     private void publishOrderStatusChangedEvent(Order order, OrderStatus previousStatus) {
         try {
             OrderStatusChangedEvent event = new OrderStatusChangedEvent(
@@ -276,24 +159,15 @@ public class OrderService {
                     order.getStatus(),
                     LocalDateTime.now()
             );
-
-            kafkaTemplate.send(ORDER_STATUS_CHANGED_TOPIC, event);
-            log.info("Published OrderStatusChangedEvent for order ID: {} ({} -> {})",
-                    order.getId(), previousStatus, order.getStatus());
+            sqsTemplate.send(sqsQueueName, event);
+            log.info("Published OrderStatusChangedEvent to SQS for order ID: {}", order.getId());
         } catch (Exception e) {
             log.error("Failed to publish OrderStatusChangedEvent for order ID: {}", order.getId(), e);
-            // Note: In production, you might want to use a dead letter queue or retry mechanism
         }
     }
 
-    /**
-     * Maps an Order entity to an OrderResponse DTO.
-     * 
-     * @param order Order entity to convert
-     * @return OrderResponse DTO representing the order
-     */
     private OrderResponse mapToResponse(Order order) {
-        List<OrderItemResponse> items = order.getOrderItems() != null ? 
+        List<OrderItemResponse> items = order.getOrderItems() != null ?
                 order.getOrderItems().stream()
                         .map(item -> new OrderItemResponse(
                                 item.getId(),
@@ -315,4 +189,3 @@ public class OrderService {
         );
     }
 }
-
