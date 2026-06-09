@@ -1,0 +1,16 @@
+---
+- name: Install Docker
+  yum:
+    name: docker
+    state: present
+
+- name: Install AWS CLI
+  yum:
+    name: awscli
+    state: present
+
+- name: Start and enable Docker
+  systemd:
+    name: docker
+    state: started
+    enabled: yes

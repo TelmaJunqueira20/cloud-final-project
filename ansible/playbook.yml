@@ -1,0 +1,26 @@
+---
+- name: Configure EC2 for Microservices
+  hosts: webservers
+  become: yes
+
+  roles:
+    - docker
+
+  tasks:
+    - name: Ensure Docker is running
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Ensure SSM Agent is running
+      systemd:
+        name: amazon-ssm-agent
+        state: started
+        enabled: yes
+
+    - name: Add ec2-user to docker group
+      user:
+        name: ec2-user
+        groups: docker
+        append: yes
