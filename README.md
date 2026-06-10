@@ -19,6 +19,16 @@ Sistema de e-commerce baseado em microserviços, deployado na AWS com Infraestru
 - [Equipa](#equipa)
 
 ---
+## Engenharia
+A solução utiliza uma arquitetura de microserviços composta por um API Gateway, User Service, Product Service e Order Service. A comunicação entre serviços combina chamadas síncronas (OpenFeign) e processamento assíncrono através do AWS SQS.
+
+A infraestrutura foi implementada na AWS com Terraform, utilizando Docker para containerização dos serviços e RDS MySQL para persistência de dados numa subnet privada. O processo de CI/CD é automatizado através do GitHub Actions, com armazenamento de imagens no Amazon ECR e deployment via AWS SSM.
+
+### Diagrama
+
+<p align="center">
+  <img src="docs/diagrams/Diagrama%20da%20engenharia.png" width="1000">
+</p>
 
 ## Arquitetura
 
@@ -226,4 +236,4 @@ docker-compose up -d
 ## Equipa
 
 - **Telma Junqueira**
-- **Lasislau Hilário**
+- **Ladislau Hilário**
