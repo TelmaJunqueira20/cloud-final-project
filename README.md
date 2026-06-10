@@ -30,6 +30,7 @@ A infraestrutura foi implementada na AWS com Terraform, utilizando Docker para c
   <img src="docs/diagrams/Diagrama%20da%20engenharia.png" width="1000">
 </p>
 
+
 ## Arquitetura
 
 ```
